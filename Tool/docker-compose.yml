@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  sih-network-forecaster:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: world_model_sih2026
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+      - ./models/saved:/app/models/saved
+    restart: unless-stopped

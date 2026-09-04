@@ -1,0 +1,17 @@
+# .dockerignore
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv/
+venv/
+env/
+.git/
+.gitignore
+
+# Ignore raw datasets unless you want them baked into the image
+data/raw/*.csv
+data/raw/*.pcap
+
+# Ignore Jupyter checkpoints
+.ipynb_checkpoints/
