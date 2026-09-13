@@ -3,7 +3,8 @@ import os
 import math
 import numpy as np
 import pandas as pd
-from scapy.all import rdpcap, IP, TCP, UDP
+from scapy.utils import PcapReader
+from scapy.layers.inet import IP, TCP, UDP
 from collections import defaultdict
 
 def calculate_entropy(port_list):
@@ -23,9 +24,6 @@ def extract_pcap_features(pcap_path):
     if not os.path.exists(pcap_path):
         raise FileNotFoundError(f"PCAP file not found: {pcap_path}")
 
-    # Read packets into memory
-    packets = rdpcap(pcap_path)
-    
     # Dictionary to hold session aggregations based on 5-tuple + direction
     flows = defaultdict(lambda: {
         'Timestamp': [], 'Fwd Pkts': 0, 'Bwd Pkts': 0, 
@@ -34,74 +32,79 @@ def extract_pcap_features(pcap_path):
         'TTLs': [], 'Dest Ports': [], 'Duplicate Seqs': set(), 'Retransmissions': 0
     })
 
-    print(f"[INFO] Analyzing {len(packets)} packets from {pcap_path}...")
+    packet_count = 0
+    print(f"[INFO] Streaming packets from {pcap_path}...")
 
     # First pass: Aggregate packets into bidirectional flows
-    for pkt in packets:
-        if not pkt.haslayer(IP):
-            continue
+    with PcapReader(pcap_path) as packets:
+        for pkt in packets:
+            packet_count += 1
+            if not pkt.haslayer(IP):
+                continue
             
-        ip_layer = pkt[IP]
-        src_ip = ip_layer.src
-        dst_ip = ip_layer.dst
-        proto = ip_layer.proto
-        ttl = ip_layer.ttl
+            ip_layer = pkt[IP]
+            src_ip = ip_layer.src
+            dst_ip = ip_layer.dst
+            proto = ip_layer.proto
+            ttl = ip_layer.ttl
         
-        sport, dport = 0, 0
-        flags = ""
-        seq = None
+            sport, dport = 0, 0
+            flags = ""
+            seq = None
         
-        if pkt.haslayer(TCP):
-            sport = pkt[TCP].sport
-            dport = pkt[TCP].dport
-            flags = pkt[TCP].flags
-            seq = pkt[TCP].seq
-        elif pkt.haslayer(UDP):
-            sport = pkt[UDP].sport
-            dport = pkt[UDP].dport
+            if pkt.haslayer(TCP):
+                sport = pkt[TCP].sport
+                dport = pkt[TCP].dport
+                flags = pkt[TCP].flags
+                seq = pkt[TCP].seq
+            elif pkt.haslayer(UDP):
+                sport = pkt[UDP].sport
+                dport = pkt[UDP].dport
             
         # Determine flow direction (smallest IP first to normalize the key)
-        if src_ip < dst_ip:
-            flow_key = f"{src_ip}-{dst_ip}-{sport}-{dport}-{proto}"
-            direction = 'Fwd'
-        else:
-            flow_key = f"{dst_ip}-{src_ip}-{dport}-{sport}-{proto}"
-            direction = 'Bwd'
+            if src_ip < dst_ip:
+                flow_key = f"{src_ip}-{dst_ip}-{sport}-{dport}-{proto}"
+                direction = 'Fwd'
+            else:
+                flow_key = f"{dst_ip}-{src_ip}-{dport}-{sport}-{proto}"
+                direction = 'Bwd'
 
         # Extract timestamp (handle Scapy float/Edecimal timestamps)
-        timestamp = float(pkt.time)
-        pkt_len = len(pkt)
+            timestamp = float(pkt.time)
+            pkt_len = len(pkt)
         
         # Populate flow metrics
-        f = flows[flow_key]
-        f['Timestamp'].append(timestamp)
-        f['TTLs'].append(ttl)
-        f['Dest Ports'].append(dport)
+            f = flows[flow_key]
+            f['Timestamp'].append(timestamp)
+            f['TTLs'].append(ttl)
+            f['Dest Ports'].append(dport)
         
-        if direction == 'Fwd':
-            f['Fwd Pkts'] += 1
-            f['Fwd Bytes'] += pkt_len
-            f['Fwd Pkt Lens'].append(pkt_len)
-        else:
-            f['Bwd Pkts'] += 1
-            f['Bwd Bytes'] += pkt_len
-            f['Bwd Pkt Lens'].append(pkt_len)
+            if direction == 'Fwd':
+                f['Fwd Pkts'] += 1
+                f['Fwd Bytes'] += pkt_len
+                f['Fwd Pkt Lens'].append(pkt_len)
+            else:
+                f['Bwd Pkts'] += 1
+                f['Bwd Bytes'] += pkt_len
+                f['Bwd Pkt Lens'].append(pkt_len)
             
         # Process TCP Flags
-        if 'F' in flags: f['Flags']['FIN'] += 1
-        if 'S' in flags: f['Flags']['SYN'] += 1
-        if 'R' in flags: f['Flags']['RST'] += 1
-        if 'P' in flags: f['Flags']['PSH'] += 1
-        if 'A' in flags: f['Flags']['ACK'] += 1
-        if 'U' in flags: f['Flags']['URG'] += 1
+            if 'F' in flags: f['Flags']['FIN'] += 1
+            if 'S' in flags: f['Flags']['SYN'] += 1
+            if 'R' in flags: f['Flags']['RST'] += 1
+            if 'P' in flags: f['Flags']['PSH'] += 1
+            if 'A' in flags: f['Flags']['ACK'] += 1
+            if 'U' in flags: f['Flags']['URG'] += 1
             
         # Track TCP retransmissions (duplicate sequence numbers from the same source)
-        if seq is not None:
-            seq_key = f"{src_ip}-{seq}"
-            if seq_key in f['Duplicate Seqs']:
-                f['Retransmissions'] += 1
-            else:
-                f['Duplicate Seqs'].add(seq_key)
+            if seq is not None:
+                seq_key = f"{src_ip}-{seq}"
+                if seq_key in f['Duplicate Seqs']:
+                    f['Retransmissions'] += 1
+                else:
+                    f['Duplicate Seqs'].add(seq_key)
+
+    print(f"[INFO] Analyzed {packet_count} packets from {pcap_path}...")
 
     # Second pass: Compile aggregated flow statistics into a DataFrame
     extracted_data = []

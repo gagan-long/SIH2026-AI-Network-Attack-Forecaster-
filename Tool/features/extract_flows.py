@@ -22,16 +22,26 @@ ATTACK_TO_TACTIC = {
 }
 
 def extract_features(file_or_path, nrows=None):
-    df = pd.read_csv(file_or_path, nrows=nrows, low_memory=False)
-    df = standardize_dataframe(df)
+    chunks = pd.read_csv(
+        file_or_path,
+        nrows=nrows,
+        chunksize=100_000,
+        low_memory=False,
+    )
+    normalized_chunks = []
 
-    if 'Label' in df.columns:
-        df['Label'] = df['Label'].fillna('Benign')
-        df['Tactic'] = df['Label'].map(ATTACK_TO_TACTIC).fillna('Unknown')
-        df['Attack_Code'] = df['Label'].astype('category').cat.codes
-        df['Tactic_Code'] = df['Tactic'].astype('category').cat.codes
-    else:
-        df['Attack_Code'] = 0
-        df['Tactic_Code'] = 0
+    for chunk in chunks:
+        chunk = standardize_dataframe(chunk)
+        if 'Label' in chunk.columns:
+            chunk['Label'] = chunk['Label'].fillna('Benign')
+            chunk['Tactic'] = chunk['Label'].map(ATTACK_TO_TACTIC).fillna('Unknown')
+            chunk['Attack_Code'] = chunk['Label'].astype('category').cat.codes
+            chunk['Tactic_Code'] = chunk['Tactic'].astype('category').cat.codes
+        else:
+            chunk['Attack_Code'] = 0
+            chunk['Tactic_Code'] = 0
+        normalized_chunks.append(chunk)
 
-    return df
+    if not normalized_chunks:
+        return standardize_dataframe(pd.DataFrame()).assign(Attack_Code=0, Tactic_Code=0)
+    return pd.concat(normalized_chunks, ignore_index=True)

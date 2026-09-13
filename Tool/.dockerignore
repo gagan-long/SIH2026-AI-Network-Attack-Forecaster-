@@ -12,6 +12,7 @@ env/
 # Ignore raw datasets unless you want them baked into the image
 data/raw/*.csv
 data/raw/*.pcap
+data/02-28-2018.csv
 
 # Ignore Jupyter checkpoints
 .ipynb_checkpoints/

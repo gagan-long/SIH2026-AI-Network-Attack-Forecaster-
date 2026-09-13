@@ -1,0 +1,394 @@
+# AI Network Attack Forecaster
+## System Architecture Document
+
+**Project:** Smart India Hackathon 2026  
+**Version:** 1.0  
+**Status:** Prototype architecture  
+**Execution mode:** Offline / analyst-assisted forecasting
+
+---
+
+## 1. Purpose and Scope
+
+AI Network Attack Forecaster estimates how an observed network intrusion may progress over the next **K time windows**. It is designed to forecast attack-stage movement rather than classify one isolated flow.
+
+The system accepts PCAP captures and CIC-style flow CSV files, converts them into a common 32-feature representation, builds source-IP temporal sequences, and applies a multi-task CNN-BiLSTM world model. The result is an interpretable dashboard containing:
+
+- a risk trajectory for the next K windows;
+- likely attack signatures;
+- an estimated MITRE ATT&CK tactic progression;
+- the features contributing most to the forecast;
+- telemetry and pipeline diagnostics.
+
+The system is a decision-support prototype. Its forecast is a prioritization signal and must not be treated as confirmed attribution or an automated containment decision.
+
+---
+
+## 2. Architectural Goals
+
+| Goal | Design response |
+| --- | --- |
+| Accept heterogeneous network telemetry | PCAP and CSV adapters converge on one canonical schema |
+| Preserve temporal behavior | Records are resampled into windows and converted to sliding sequences |
+| Forecast progression | A CNN extracts local bursts and a BiLSTM models temporal dependencies |
+| Provide multiple levels of explanation | State, attack, tactic, risk, and feature outputs are exposed separately |
+| Run offline for demonstrations | Local files, bundled checkpoint, Streamlit UI, and Docker deployment |
+| Support a baseline comparison | Logistic regression provides a static, single-window benchmark |
+| Keep the pipeline replaceable | Extraction, sequence building, inference, and UI are separate modules |
+
+---
+
+## 3. High-Level Architecture
+
+```mermaid
+flowchart LR
+	A[PCAP capture] --> B[PCAP feature extractor]
+	C[Flow CSV] --> D[CSV normalizer]
+	B --> E[Canonical schema<br/>32 numeric features]
+	D --> E
+	E --> F[Source-IP grouping<br/>and time resampling]
+	F --> G[Sliding sequences<br/>X: batch x T x 32]
+
+	G --> H[Static baseline<br/>Logistic Regression]
+	G --> I[CNN-BiLSTM<br/>World Model]
+	I --> J[Autoregressive<br/>K-step inference]
+	J --> K[Risk timeline]
+	J --> L[Attack class forecast]
+	J --> M[MITRE tactic forecast]
+	J --> N[Feature variance summary]
+
+	K --> O[Streamlit dashboard]
+	L --> O
+	M --> O
+	N --> O
+	H --> P[Benchmark metrics]
+```
+
+### Component ownership
+
+| Layer | Primary module(s) | Responsibility |
+| --- | --- | --- |
+| Ingestion | `features/pcap_extractor.py`, `features/extract_flows.py` | Read PCAP or CSV and derive flow-level features |
+| Schema | `features/canonical_schema.py` | Normalize headers, timestamps, source IP, missing values, and 32 features |
+| Temporal preparation | `features/build_sequences.py` | Resample by source IP and build `(T, 32)` windows plus labels |
+| Intelligence mapping | `intelligence/kb_mapper.py` | Map attack labels to attack codes and MITRE tactics |
+| Baseline | `baseline/logistic_regression.py` | Compare static classification against temporal forecasting |
+| Model | `models/world_model.py` | Build the CNN-BiLSTM multi-task neural network |
+| Training | `models/train.py`, `models/train.py` | Train and save the world-model checkpoint |
+| Inference | `models/inference.py` | Roll predictions forward and calculate risk |
+| Explanation | `models/explain.py` | Produce feature-attribution support for the UI |
+| Presentation | `app/app.py`, `app/components.py` | Upload telemetry and render forecast views |
+| Orchestration | `run_pipeline.py` | Run generation, training, evaluation, and demo actions |
+
+---
+
+## 4. End-to-End Data Flow
+
+```mermaid
+sequenceDiagram
+	actor Analyst
+	participant UI as Streamlit dashboard
+	participant Ingest as Ingestion adapters
+	participant Schema as Canonical schema
+	participant Seq as Sequence builder
+	participant Model as CNN-BiLSTM model
+	participant Forecast as Forecast engine
+
+	Analyst->>UI: Upload PCAP or flow CSV
+	UI->>Ingest: Read temporary input file
+	Ingest-->>UI: Raw flow records
+	UI->>Schema: Standardize columns and values
+	Schema-->>UI: Timestamped 32-feature records
+	UI->>Seq: Group by source IP and resample windows
+	Seq-->>UI: X with shape (batch, T, 32)
+	UI->>Forecast: Forecast latest sequence for K steps
+	loop Each future window
+		Forecast->>Model: Predict next state, attack, tactic
+		Model-->>Forecast: state + attack probabilities + tactic probabilities
+		Forecast->>Forecast: Calculate weighted risk and shift sequence
+	end
+	Forecast-->>UI: Timeline, tactics, top features
+	UI-->>Analyst: Risk and ATT&CK progression dashboard
+```
+
+### Input normalization
+
+`standardize_dataframe()` provides the boundary between external data and model-ready data:
+
+1. Header aliases are mapped to canonical names.
+2. Missing timestamps receive deterministic fallback timestamps.
+3. Missing source IPs receive a network-wide fallback identifier.
+4. Numeric features are converted, infinities are removed, and missing values become `0.0`.
+5. Only reserved metadata and the canonical 32 features continue downstream.
+
+This boundary allows multiple datasets to use the same sequence and model code.
+
+### Canonical feature vector
+
+Each time window is represented by 32 flow and packet features:
+
+```text
+Destination / protocol: Dst Port, Protocol
+Volume and duration: Flow Duration, forward/backward packet counts and lengths
+Packet statistics: min, max, mean, and standard deviation for packet lengths
+Rates and timing: Flow Byts/s, Flow Pkts/s, Flow IAT, forward IAT, backward IAT
+TCP behavior: FIN, SYN, RST, PSH, ACK, and URG counts
+Network behavior: Down/Up Ratio, TTL Mean, TTL Variance
+Detection signals: Port Scan Entropy, TCP Retransmission Cnt
+```
+
+---
+
+## 5. Temporal Sequence Construction
+
+```mermaid
+flowchart TB
+	A[Timestamped flow records] --> B{Group by Src IP}
+	B --> C[Floor timestamps to window size<br/>default: 10 seconds]
+	C --> D[Mean of 32 numeric features]
+	D --> E[Max attack and tactic code per window]
+	E --> F[Sort each source timeline]
+	F --> G[Sliding window length T<br/>default: 15]
+	G --> H[Input X: T historical states]
+	G --> I[Target y: state at T+1]
+	G --> J[Target y: attack at T+1]
+	G --> K[Target y: tactic at T+1]
+```
+
+The model input is:
+
+```text
+X.shape = (number_of_sequences, T, 32)
+```
+
+For each sequence, the next window is supervised through three targets:
+
+- `state`: the next 32 continuous feature values;
+- `attack`: the next specific attack class code;
+- `tactic`: the next high-level MITRE ATT&CK tactic code.
+
+Short timelines are left-padded with zero-valued windows so that the model always receives the configured sequence length.
+
+---
+
+## 6. World Model Architecture
+
+```mermaid
+flowchart LR
+	A[Input sequence<br/>(T, 32)] --> B[Conv1D<br/>64 filters, k=3]
+	B --> C[Batch normalization]
+	C --> D[Conv1D<br/>128 filters, k=3]
+	D --> E[Batch normalization]
+	E --> F[Bidirectional LSTM<br/>128 units]
+	F --> G[Dropout 0.3]
+	G --> H[Shared latent<br/>Dense 128 + ReLU]
+	H --> I[Batch normalization]
+	I --> J[State head<br/>32 linear values]
+	I --> K[Attack head<br/>16-class softmax]
+	I --> L[Tactic head<br/>7-class softmax]
+```
+
+### Why the model is multi-task
+
+The three heads describe different views of the same latent network state:
+
+- **State head:** predicts what the next traffic feature vector may look like.
+- **Attack head:** predicts a specific attack signature when the training labels support it.
+- **Tactic head:** predicts the broader attack-stage progression used for risk scoring.
+
+This separation lets the dashboard show a high-level operational risk even when a precise attack signature is uncertain.
+
+### Tactic risk calculation
+
+The inference layer computes an expected risk from tactic probabilities:
+
+$$
+R_t = \min\left(1, \sum_i P(\mathrm{tactic}_i \mid X_t) \times W_i\right)
+$$
+
+Current tactic weights are:
+
+| Tactic | Weight |
+| --- | ---: |
+| None | 0.00 |
+| Reconnaissance | 0.20 |
+| Initial Access | 0.50 |
+| Lateral Movement | 0.85 |
+| Command and Control | 0.90 |
+| Impact | 0.80 |
+| Exfiltration | 1.00 |
+
+These weights are prioritization policy, not probabilities and not a formal severity standard.
+
+---
+
+## 7. Autoregressive Forecasting
+
+```mermaid
+flowchart TD
+	A[Latest observed sequence] --> B[Model prediction]
+	B --> C[Next state]
+	B --> D[Tactic probability vector]
+	D --> E[Weighted risk score]
+	D --> F[Dominant tactic]
+	C --> G[Remove oldest window]
+	G --> H[Append predicted state]
+	H --> I{More than K steps?}
+	I -- Yes --> B
+	I -- No --> J[Return forecast package]
+	E --> J
+	F --> J
+```
+
+At each step, the predicted continuous state replaces the oldest state in the input sequence. This makes the forecast forward-looking, but it also means errors can compound over long horizons. The dashboard should therefore emphasize near-term lead time and uncertainty rather than treating distant steps as certain outcomes.
+
+The inference package contains:
+
+```text
+{
+  "K": integer,
+  "risk_timeline": [float, ...],
+  "tactics": [string, ...],
+  "top_features": {feature_name: score, ...}
+}
+```
+
+---
+
+## 8. User Interface and Operational Workflow
+
+```mermaid
+flowchart LR
+	A[Analyst] --> B[Upload PCAP / CSV]
+	B --> C[Telemetry diagnostics]
+	C --> D[Configure K, T, and window size]
+	D --> E[Run forecast]
+	E --> F[Current and peak risk]
+	E --> G[Infiltration trajectory]
+	E --> H[Top driving features]
+	E --> I[MITRE progression]
+	E --> J[Latest telemetry snapshot]
+```
+
+The dashboard has two runtime modes:
+
+- **Checkpoint mode:** loads `models/saved/best_world_model.keras` and performs TensorFlow inference.
+- **Simulation mode:** displays a deterministic preview curve when no checkpoint is available, allowing the interface to be demonstrated without a trained model.
+
+Uploaded files are written to temporary storage for parsing and removed after ingestion. The resulting normalized dataframe and sequence cache remain in Streamlit session state to avoid repeating extraction when only forecast settings change.
+
+---
+
+## 9. Deployment Architecture
+
+```mermaid
+flowchart TB
+	U[Analyst browser] --> S[Streamlit :8501]
+	S --> A[Tool/app]
+	S --> F[Feature modules]
+	S --> M[TensorFlow checkpoint]
+	S --> D[(Tool/data)]
+
+	subgraph Docker container
+		A
+		F
+		M
+	end
+
+	D -->|read-only mount| Docker[Docker runtime]
+	Docker --> S
+```
+
+### Local execution
+
+```powershell
+cd Tool
+python run_pipeline.py --action generate
+python -m streamlit run app/app.py
+```
+
+### Container execution
+
+```powershell
+cd Tool
+docker compose up --build -d
+```
+
+The expected dashboard endpoint is `http://localhost:8501`. The container packages the application and model while the data directory is mounted read-only.
+
+---
+
+## 10. Training and Evaluation Architecture
+
+```mermaid
+flowchart LR
+	A[Prepared CIC-style CSV<br/>or synthetic PCAP] --> B[Feature extraction]
+	B --> C[Sequence and labels]
+	C --> D[Train CNN-BiLSTM]
+	D --> E[Saved Keras checkpoint]
+	C --> F[Logistic regression baseline]
+	E --> G[Inference evaluation]
+	F --> H[Baseline metrics]
+	G --> I[Compare temporal forecast<br/>with static classification]
+	H --> I
+```
+
+The baseline is intentionally retained because it answers a useful question: whether temporal context provides value beyond classifying one feature vector. Evaluation should report, at minimum, attack classification performance, tactic classification performance, next-state error, and forecast lead time at selected risk thresholds.
+
+---
+
+## 11. Reliability, Security, and Limitations
+
+### Reliability controls
+
+- Validate that the canonical feature dimension is 32 before inference.
+- Display the number of flows, sequences, and available features in the UI.
+- Keep the selected window size, sequence length, and forecast horizon visible to the analyst.
+- Label simulated output clearly when no checkpoint is present.
+- Treat forecasts as estimates and expose the underlying feature snapshot.
+
+### Security controls
+
+- Process uploaded captures locally; do not require external telemetry services.
+- Remove temporary upload files after parsing.
+- Mount demonstration data read-only in Docker.
+- Avoid executing content from uploaded files; inputs are parsed as PCAP or tabular data only.
+- Restrict dashboard exposure to a trusted local or protected network because authentication is outside the prototype scope.
+
+### Known limitations
+
+- PCAP uploads are currently treated as unlabeled telemetry, so attack and tactic labels default to benign placeholders during sequence construction.
+- Missing source IPs collapse into a fallback identifier, which can mix independent sources.
+- Autoregressive predictions may drift as K increases because predicted states become future inputs.
+- Tactic risk weights are manually chosen policy values and require domain validation.
+- The bundled model and prepared dataset are demonstration assets, not evidence of production-grade generalization.
+
+---
+
+## 12. Traceability to Repository
+
+| Architecture element | Repository location |
+| --- | --- |
+| Pipeline launcher | `Tool/run_pipeline.py` |
+| PCAP extraction | `Tool/features/pcap_extractor.py` |
+| CSV extraction and cleaning | `Tool/features/extract_flows.py` |
+| Canonical 32-feature contract | `Tool/features/canonical_schema.py` |
+| Windowing and sequence creation | `Tool/features/build_sequences.py` |
+| Attack-to-tactic mapping | `Tool/intelligence/kb_mapper.py` |
+| CNN-BiLSTM model | `Tool/models/world_model.py` |
+| Training | `Tool/models/train.py` |
+| Forecast and risk scoring | `Tool/models/inference.py` |
+| Streamlit application | `Tool/app/app.py` |
+| Dashboard plots | `Tool/app/components.py` |
+| Docker deployment | `Tool/Dockerfile`, `Tool/docker-compose.yml` |
+
+---
+
+## 13. Recommended Production Evolution
+
+1. Replace fallback source identifiers with validated sensor or host identity.
+2. Add calibrated uncertainty intervals and confidence decay across forecast steps.
+3. Separate training, validation, and test sources by time and host to prevent leakage.
+4. Version the canonical schema, label mapping, model checkpoint, and risk policy together.
+5. Add authentication, upload quotas, audit logs, and malware-safe file handling before network deployment.
+6. Evaluate on multiple environments and datasets before using the forecast for incident response automation.

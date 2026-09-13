@@ -3,17 +3,17 @@ import numpy as np
 from features.canonical_schema import CANONICAL_32_FEATURES
 
 def resample_to_windows(df, window_size='10S'):
-    df_time = df.set_index('Timestamp')
     windowed_data = []
 
-    for src_ip, group in df_time.groupby('Src IP'):
-        resampled_features = group[CANONICAL_32_FEATURES].resample(window_size).mean().fillna(0.0)
-        attack_code = group['Attack_Code'].resample(window_size).max().fillna(0).astype(int)
-        tactic_code = group['Tactic_Code'].resample(window_size).max().fillna(0).astype(int)
-
-        resampled_group = pd.concat([resampled_features, attack_code, tactic_code], axis=1)
-        resampled_group['Src IP'] = src_ip
-        windowed_data.append(resampled_group)
+    for src_ip, group in df.groupby('Src IP', sort=False):
+        group = group.copy()
+        group['_Window'] = group['Timestamp'].dt.floor(window_size)
+        grouped = group.groupby('_Window', sort=True, observed=True)
+        resampled_features = grouped[CANONICAL_32_FEATURES].mean().fillna(0.0)
+        resampled_features['Attack_Code'] = grouped['Attack_Code'].max().fillna(0).astype(int)
+        resampled_features['Tactic_Code'] = grouped['Tactic_Code'].max().fillna(0).astype(int)
+        resampled_features['Src IP'] = src_ip
+        windowed_data.append(resampled_features.reset_index().rename(columns={'_Window': 'Timestamp'}))
 
     if not windowed_data:
         return pd.DataFrame(columns=CANONICAL_32_FEATURES + ['Attack_Code', 'Tactic_Code', 'Src IP'])

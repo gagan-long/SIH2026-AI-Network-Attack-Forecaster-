@@ -5,6 +5,7 @@ import os
 import tempfile
 import tensorflow as tf
 import sys
+import hashlib
 
 TOOL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -21,8 +22,20 @@ from models.inference import forecast
 # Fix import relative path issues
 from components import plot_risk_timeline, plot_feature_attribution, format_mitre_progression
 
-st.set_page_config(page_title="AI Network Attack Forecaster", page_icon="🛡️", layout="wide")
-MODEL_PATH = os.path.join("models", "saved", "best_world_model.keras")
+st.set_page_config(page_title="AI Network Attack Forecaster", page_icon=":material/shield:", layout="wide")
+MODEL_PATH = os.path.join(TOOL_ROOT, "models", "saved", "best_world_model.keras")
+
+st.markdown(
+    """
+    <style>
+        [data-testid="stSidebar"] { border-right: 1px solid #d9e2ec; }
+        [data-testid="stMetric"] { padding: 0.25rem 0 0.5rem; }
+        [data-testid="stExpander"] { border: 1px solid #d9e2ec; border-radius: 6px; }
+        h1 { letter-spacing: -0.02em; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 @st.cache_resource
 def load_cached_model():
@@ -35,55 +48,83 @@ def load_cached_model():
 
 model = load_cached_model()
 
-st.sidebar.header("🛡️ System Controls")
+st.sidebar.header("System controls", divider="blue")
 if model is not None:
     expected_dim = model.input_shape[-1]
-    st.sidebar.success(f"World Model Active (Expects {expected_dim} Features)")
+    st.sidebar.success(f"World model active · {expected_dim} features")
 else:
-    st.sidebar.warning("No checkpoint found in models/saved/. Running in Simulation Mode.")
+    st.sidebar.warning("No checkpoint found · simulation mode")
 
-uploaded_file = st.sidebar.file_uploader("Upload Network Telemetry (PCAP / CSV up to 500MB)", type=["pcap", "csv", "pcapng"])
+uploaded_file = st.sidebar.file_uploader("Upload network telemetry (PCAP / CSV, up to 500 MB)", type=["pcap", "csv", "pcapng"])
 
-st.sidebar.markdown("### Temporal Parameters")
-K_steps = st.sidebar.slider("Forecast Horizon (K steps)", min_value=3, max_value=20, value=10)
-T_length = st.sidebar.slider("Sequence Length (T)", min_value=5, max_value=30, value=15)
-window_size = st.sidebar.selectbox("Time Window Size", ["5S", "10S", "30S", "1T"], index=1)
+st.sidebar.subheader("Forecast settings")
+K_steps = st.sidebar.slider("Forecast horizon (K)", min_value=3, max_value=20, value=10)
+T_length = st.sidebar.slider("Sequence length (T)", min_value=5, max_value=30, value=15)
+window_size = st.sidebar.selectbox("Time window", ["5S", "10S", "30S", "1T"], index=1)
 
-st.title("🛡️ AI Network Attack Forecaster")
-st.caption("Temporal World Model P(Sₜ₊₁ | Sₜ) & Forward Trajectory Simulation (SIH 2026)")
+st.title("AI network attack forecaster", icon=":material/shield:")
+st.caption("Temporal world model for forward infiltration-risk forecasting · SIH 2026")
+
+with st.expander("How it works", icon=":material/info:"):
+    st.markdown(
+        """
+        Upload a PCAP or flow CSV. The pipeline normalizes 32 features, builds a sequence from the latest time windows, and forecasts risk across the next `K` windows.
+
+        Risk is a prioritization signal, not a confirmed incident verdict.
+        """
+    )
 
 if uploaded_file is not None:
     file_size_mb = uploaded_file.size / (1024 * 1024)
     st.sidebar.info(f"Loaded: `{uploaded_file.name}` ({file_size_mb:.1f} MB)")
     is_pcap = uploaded_file.name.lower().endswith((".pcap", ".pcapng"))
+    file_buffer = uploaded_file.getbuffer()
+    file_signature = (uploaded_file.name, uploaded_file.size, hashlib.sha1(file_buffer).hexdigest())
 
-    with st.spinner(f"Ingesting telemetry and extracting 32 canonical features..."):
-        if is_pcap:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pcap") as tmp:
-                tmp.write(uploaded_file.getbuffer())
-                tmp_path = tmp.name
-            raw_df = extract_pcap_features(tmp_path)
-            os.remove(tmp_path)
-            df_clean = standardize_dataframe(raw_df)
-            df_clean['Attack_Code'] = 0
-            df_clean['Tactic_Code'] = 0
-        else:
-            df_clean = extract_features(uploaded_file)
+    if st.session_state.get("telemetry_signature") != file_signature:
+        with st.spinner("Ingesting telemetry and extracting features..."):
+            suffix = ".pcap" if is_pcap else ".csv"
+            tmp_path = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                    tmp.write(file_buffer)
+                    tmp_path = tmp.name
 
-    with st.spinner(f"Resampling into {window_size} windows and stacking temporal sequences..."):
-        X, _ = build_sequences_pipeline(df_clean, window_size=window_size, T=T_length)
+                if is_pcap:
+                    raw_df = extract_pcap_features(tmp_path)
+                    df_clean = standardize_dataframe(raw_df)
+                    df_clean['Attack_Code'] = 0
+                    df_clean['Tactic_Code'] = 0
+                else:
+                    df_clean = extract_features(tmp_path)
+            finally:
+                if tmp_path and os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            st.session_state.telemetry_signature = file_signature
+            st.session_state.telemetry_dataframe = df_clean
+            st.session_state.sequence_cache = {}
+    else:
+        df_clean = st.session_state.telemetry_dataframe
 
-    with st.expander("🔍 Telemetry Diagnostic Inspector"):
+    sequence_key = (file_signature, window_size, T_length)
+    if sequence_key not in st.session_state.get("sequence_cache", {}):
+        with st.spinner(f"Building {window_size} temporal sequences..."):
+            X, _ = build_sequences_pipeline(df_clean, window_size=window_size, T=T_length)
+        st.session_state.sequence_cache[sequence_key] = X
+    else:
+        X = st.session_state.sequence_cache[sequence_key]
+
+    with st.expander("Telemetry diagnostics", icon=":material/monitoring:"):
         c1, c2, c3 = st.columns(3)
-        c1.write(f"**Total Flows Extracted:** {len(df_clean)}")
-        c2.write(f"**Sequence Tensor Shape:** `{X.shape}`")
-        c3.write(f"**Active Numeric Features:** {X.shape[-1] if len(X) > 0 else 0} / 32")
+        c1.metric("Flows", f"{len(df_clean):,}")
+        c2.metric("Sequences", f"{len(X):,}")
+        c3.metric("Features", f"{X.shape[-1] if len(X) > 0 else 0} / 32")
 
     if len(X) == 0:
         st.error("Uploaded capture could not produce valid sequences. Try a smaller window size.")
     else:
         latest_seq = X[-1:] 
-        with st.spinner(f"Executing K-Step forward simulation (K={K_steps})..."):
+        with st.spinner(f"Forecasting {K_steps} windows..."):
             if model is not None:
                 out = forecast(model, latest_seq, K=K_steps, feature_names=CANONICAL_32_FEATURES)
             else:
@@ -100,24 +141,27 @@ if uploaded_file is not None:
         max_risk = max(out["risk_timeline"])
         peak_step = out["risk_timeline"].index(max_risk) + 1
 
-        col1.metric("Current Window Risk", f"{curr_risk:.1%}")
-        col2.metric(f"Peak Forecast Risk", f"{max_risk:.1%}", f"+{max_risk - curr_risk:.1%}")
-        col3.metric("Defensive Lead Time", f"+{peak_step} Windows Ahead")
+        col1.metric("Current risk", f"{curr_risk:.1%}")
+        col2.metric("Peak risk", f"{max_risk:.1%}", f"+{max_risk - curr_risk:.1%}")
+        col3.metric("Lead time", f"+{peak_step} windows")
 
-        st.markdown("### Forecasted Infiltration Trajectory")
-        st.plotly_chart(plot_risk_timeline(out, threshold=0.75), use_container_width=True)
+        st.subheader("Infiltration trajectory")
+        st.plotly_chart(plot_risk_timeline(out, threshold=0.75), width="stretch")
 
         c1, c2 = st.columns(2)
         with c1:
-            st.markdown("### Top Driving Features (SHAP Attribution)")
-            st.plotly_chart(plot_feature_attribution(out["top_features"]), use_container_width=True)
+            st.subheader("Top driving features")
+            st.caption("Relative SHAP influence, not attack probability.")
+            st.plotly_chart(plot_feature_attribution(out["top_features"]), width="stretch")
 
         with c2:
-            st.markdown("### MITRE ATT&CK Stage Progression")
+            st.subheader("MITRE ATT&CK progression")
+            st.caption("Estimated stages, not confirmed labels.")
             st.info(format_mitre_progression(out["tactics"]))
             
-            st.markdown("### Telemetry Snapshot (Canonical Columns)")
+            st.subheader("Telemetry snapshot")
+            st.caption("Latest normalized records.")
             preview_cols = ['Timestamp', 'Dst Port', 'TotLen Fwd Pkts', 'Port Scan Entropy', 'TCP Retransmission Cnt']
-            st.dataframe(df_clean[[c for c in preview_cols if c in df_clean.columns]].tail(6), use_container_width=True)
+            st.dataframe(df_clean[[c for c in preview_cols if c in df_clean.columns]].tail(6), width="stretch")
 else:
-    st.info("👈 Upload a network capture (PCAP) or flow CSV (up to 500MB) from the sidebar to begin forecasting.")
+    st.info("Upload a PCAP or flow CSV from the sidebar to begin forecasting.", icon=":material/upload_file:")
