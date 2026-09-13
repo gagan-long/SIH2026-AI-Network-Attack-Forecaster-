@@ -1,8 +1,10 @@
 # AI Network Attack Forecaster
 
-An offline prototype for **predicting how a network intrusion may progress**, rather than only classifying a single flow as benign or malicious. Built for the Smart India Hackathon (SIH) 2026 problem statement: *AI-based Network Attack Forecasting from Network Traffic Data*.
+> **Forecast the next stage of an intrusion, not just the last suspicious flow.**
 
-The project converts PCAP or flow-CSV telemetry into time-windowed network states, learns temporal state transitions with a CNN–BiLSTM world model, and forecasts the next *K* attack states with MITRE ATT&CK-aligned risk indicators.
+An offline Smart India Hackathon 2026 prototype for forecasting how network attacks may progress over time. The project converts PCAP or flow-CSV telemetry into temporal network states, learns state transitions with a CNN-BiLSTM world model, and presents a configurable multi-step risk forecast aligned with MITRE ATT&CK tactics.
+
+> **Prototype status:** Forecasts are analyst prioritization signals for offline experimentation and demonstrations, not confirmed incidents or automated containment decisions.
 
 ## What it does
 
@@ -16,6 +18,22 @@ The project converts PCAP or flow-CSV telemetry into time-windowed network state
 - Includes a synthetic multi-stage PCAP generator for repeatable demonstrations.
 
 ## Architecture
+
+```mermaid
+flowchart LR
+    A[PCAP or flow CSV] --> B[Feature extraction]
+    B --> C[Canonical 32-feature schema]
+    C --> D[Source-IP time windows]
+    D --> E[Temporal sequences<br/>batch x T x 32]
+    E --> F[CNN-BiLSTM world model]
+    F --> G[K-step autoregressive forecast]
+    G --> H[Risk trajectory]
+    G --> I[MITRE ATT&CK progression]
+    G --> J[Feature drivers]
+    H --> K[Streamlit dashboard]
+    I --> K
+    J --> K
+```
 
 ```text
 PCAP / CIC-style flow CSV
@@ -41,13 +59,10 @@ K-step autoregressive forecast --> Streamlit dashboard
 ## Repository layout
 
 ```text
-SIH2026/
+SIH_project_2026/
 ├── README.md
-├── Doc/
-│   ├── problem.md                 # SIH problem statement
-│   ├── Architecture_doc.md        # Architecture notes
-│   ├── Execution flow.md          # Pipeline flow
-│   └── dataset.md                 # Dataset references
+├── Document/
+│   └── Architecture               # Full architecture document with diagrams
 └── Tool/                          # Application source and runtime files
     ├── app/
     │   ├── app.py                 # Streamlit dashboard
@@ -70,7 +85,7 @@ SIH2026/
     │   └── train_demo_model.py    # World-model training entry point
     ├── Dockerfile
     ├── docker-compose.yml
-    ├── data/02-28-2018.csv        # Supplied CIC-IDS2018 source data  (https://www.kaggle.com/datasets/dhoogla/csecicids2018)
+    ├── data/02-28-2018.csv        # CIC-IDS2018 source data
     ├── data/processed/            # Generated balanced training data
     ├── requirements.txt
     └── run_pipeline.py
@@ -143,7 +158,6 @@ The project provides these actions:
 
 ```powershell
 python run_pipeline.py --action generate
-python run_pipeline.py --action setup
 python run_pipeline.py --action train
 python run_pipeline.py --action evaluate
 python run_pipeline.py --action demo
@@ -197,7 +211,7 @@ The CSV reader expects a `Timestamp` column and CIC-style labels. It cleans inva
 The repository includes `Tool/data/02-28-2018.csv`, a CIC-IDS2018 flow-data file with 613,104 records. Run the setup action once to create a compact, balanced local dataset at `Tool/data/processed/cicids2018_demo.csv`:
 
 ```powershell
-python run_pipeline.py --action setup
+python scripts/prepare_dataset.py
 ```
 
 The prepared dataset samples up to 10,000 rows per label, adds a network-wide source identifier because the source file has no IP-address columns, and preserves chronological ordering. The Streamlit dashboard automatically selects it when available.
@@ -252,10 +266,7 @@ python -m pip install -r requirements.txt
 
 ## Documentation
 
-- [Problem statement](Doc/problem.md)
-- [Architecture notes](Doc/Architecture_doc.md)
-- [Execution flow](<Doc/Execution flow.md>)
-- [Dataset notes](Doc/dataset.md)
+- [System architecture](Document/Architecture)
 
 ## Project context
 
