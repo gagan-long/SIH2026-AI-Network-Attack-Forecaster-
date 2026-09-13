@@ -15,10 +15,11 @@ AI Network Attack Forecaster estimates how an observed network intrusion may pro
 The system accepts PCAP captures and CIC-style flow CSV files, converts them into a common 32-feature representation, builds source-IP temporal sequences, and applies a multi-task CNN-BiLSTM world model. The result is an interpretable dashboard containing:
 
 - a risk trajectory for the next K windows;
-- likely attack signatures;
 - an estimated MITRE ATT&CK tactic progression;
 - the features contributing most to the forecast;
 - telemetry and pipeline diagnostics.
+
+The model also has a specific attack-class output head. That head is available for future dashboard expansion; the current forecast helper exposes the next-state, tactic, risk, and feature-summary outputs.
 
 The system is a decision-support prototype. Its forecast is a prioritization signal and must not be treated as confirmed attribution or an automated containment decision.
 
@@ -74,7 +75,7 @@ flowchart LR
 | Intelligence mapping | `intelligence/kb_mapper.py` | Map attack labels to attack codes and MITRE tactics |
 | Baseline | `baseline/logistic_regression.py` | Compare static classification against temporal forecasting |
 | Model | `models/world_model.py` | Build the CNN-BiLSTM multi-task neural network |
-| Training | `models/train.py`, `models/train.py` | Train and save the world-model checkpoint |
+| Training | `models/train.py` | Train and save the world-model checkpoint |
 | Inference | `models/inference.py` | Roll predictions forward and calculate risk |
 | Explanation | `models/explain.py` | Produce feature-attribution support for the UI |
 | Presentation | `app/app.py`, `app/components.py` | Upload telemetry and render forecast views |
@@ -242,16 +243,18 @@ flowchart TD
 
 At each step, the predicted continuous state replaces the oldest state in the input sequence. This makes the forecast forward-looking, but it also means errors can compound over long horizons. The dashboard should therefore emphasize near-term lead time and uncertainty rather than treating distant steps as certain outcomes.
 
-The inference package contains:
+The current inference package contains:
 
 ```text
 {
   "K": integer,
   "risk_timeline": [float, ...],
-  "tactics": [string, ...],
+	"tactics": [string, ...],
   "top_features": {feature_name: score, ...}
 }
 ```
+
+The model's attack-class probabilities are computed by the multi-task network but are not currently included in this returned package.
 
 ---
 

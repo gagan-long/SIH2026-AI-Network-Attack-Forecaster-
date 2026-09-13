@@ -70,7 +70,7 @@ SIH2026/
     │   └── train_demo_model.py    # World-model training entry point
     ├── Dockerfile
     ├── docker-compose.yml
-    ├── data/02-28-2018.csv        # Supplied CIC-IDS2018 source data
+    ├── data/02-28-2018.csv        # Supplied CIC-IDS2018 source data  (https://www.kaggle.com/datasets/dhoogla/csecicids2018)
     ├── data/processed/            # Generated balanced training data
     ├── requirements.txt
     └── run_pipeline.py
