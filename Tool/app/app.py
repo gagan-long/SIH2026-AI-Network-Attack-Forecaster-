@@ -6,6 +6,11 @@ import tempfile
 import tensorflow as tf
 import sys
 import hashlib
+<<<<<<< HEAD
+=======
+import json
+import zipfile
+>>>>>>> e5900b2 (doker update pipeline update)
 
 TOOL_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 APP_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -22,6 +27,30 @@ from models.inference import forecast
 # Fix import relative path issues
 from components import plot_risk_timeline, plot_feature_attribution, format_mitre_progression
 
+<<<<<<< HEAD
+=======
+
+def _remove_unsupported_initializer_fields(value):
+    unsupported_fields = {
+        "input_axes",
+        "output_axes",
+        "renorm",
+        "renorm_clipping",
+        "renorm_momentum",
+        "quantization_config",
+    }
+    if isinstance(value, dict):
+        return {
+            key: _remove_unsupported_initializer_fields(item)
+            for key, item in value.items()
+            if key not in unsupported_fields
+        }
+    if isinstance(value, list):
+        return [_remove_unsupported_initializer_fields(item) for item in value]
+    return value
+
+
+>>>>>>> e5900b2 (doker update pipeline update)
 st.set_page_config(page_title="AI Network Attack Forecaster", page_icon=":material/shield:", layout="wide")
 MODEL_PATH = os.path.join(TOOL_ROOT, "models", "saved", "best_world_model.keras")
 
@@ -42,8 +71,27 @@ def load_cached_model():
     if os.path.exists(MODEL_PATH):
         try:
             return tf.keras.models.load_model(MODEL_PATH, compile=False)
+<<<<<<< HEAD
         except Exception as e:
             st.sidebar.error(f"Error loading checkpoint: {e}")
+=======
+        except Exception:
+            try:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    compatible_path = os.path.join(temp_dir, "compatible_model.keras")
+                    with zipfile.ZipFile(MODEL_PATH) as source, zipfile.ZipFile(compatible_path, "w") as target:
+                        for archive_item in source.infolist():
+                            content = source.read(archive_item.filename)
+                            if archive_item.filename == "config.json":
+                                config = json.loads(content.decode("utf-8"))
+                                content = json.dumps(
+                                    _remove_unsupported_initializer_fields(config)
+                                ).encode("utf-8")
+                            target.writestr(archive_item, content)
+                    return tf.keras.models.load_model(compatible_path, compile=False)
+            except Exception as compatibility_error:
+                st.sidebar.error(f"Error loading checkpoint: {compatibility_error}")
+>>>>>>> e5900b2 (doker update pipeline update)
     return None
 
 model = load_cached_model()

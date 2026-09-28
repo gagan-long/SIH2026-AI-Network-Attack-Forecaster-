@@ -50,9 +50,16 @@ else:
     if args.action in ['demo', 'all']:
         print("\n[>>>] STEP 4: Launching Offline Streamlit Dashboard (500MB Upload Enabled)...")
         subprocess.run([
+<<<<<<< HEAD
             "streamlit", "run", "app/app.py", 
             "--server.maxUploadSize=500",
             "--server.port=8501"
+=======
+            sys.executable, "-m", "streamlit", "run", "app/app.py",
+            "--server.maxUploadSize=500",
+            "--server.port=8501",
+            "--server.address=0.0.0.0"
+>>>>>>> e5900b2 (doker update pipeline update)
         ], check=True)
 
 if __name__ == "__main__":
