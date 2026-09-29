@@ -105,8 +105,8 @@ From the repository root:
 
 ```powershell
 cd Tool
-py -3.10 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+py -m venv .venv
+.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
@@ -121,7 +121,7 @@ To run a command without activating the environment:
 
 ```powershell
 cd Tool
-.\.venv\Scripts\python.exe run_pipeline.py --action evaluate
+.venv\Scripts\python.exe run_pipeline.py --action evaluate
 ```
 
 ## Run individual components
