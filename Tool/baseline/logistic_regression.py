@@ -11,9 +11,7 @@ from features.pcap_extractor import extract_pcap_features
 from features.canonical_schema import standardize_dataframe
 
 def evaluate_baseline():
-    print("==================================================")
-    print("📊 SIH 2026: Static Baseline Evaluation")
-    print("==================================================")
+   
     
     pcap_path = 'data/raw/synthetic_multi_stage_attack.pcap'
     if not os.path.exists(pcap_path):
